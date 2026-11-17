@@ -17,6 +17,7 @@ import hidreader as hr
 import history
 import iconrender
 import theme
+import version
 import winutil
 from i18n import set_language, t
 
@@ -121,6 +122,13 @@ def sync_widget(mgr):
         mgr.windows["widget"] = MiniWidget(mgr)
     elif not enabled and win is not None:
         win.destroy()
+
+
+def confirm_update(mgr, info):
+    notes = info.get("notes") or ""
+    if messagebox.askyesno(t("upd_title"), t("upd_confirm", info["version"], version.VERSION, notes),
+                           parent=mgr.root):
+        mgr.app.apply_update(info)
 
 
 def update(mgr, state, cfg):
@@ -545,6 +553,16 @@ class SettingsWindow:
         ttk.Checkbutton(app, text=t("chk_widget"), variable=self.widget_var).grid(
             row=3, column=0, columnspan=2, sticky="w", **pad)
 
+        # --- оновлення ---
+        upd = ttk.LabelFrame(outer, text=t("grp_update"), padding=8)
+        upd.pack(fill="x", pady=(8, 0))
+        self.upd_var = tk.BooleanVar(value=bool(cfg.get("check_updates", True)))
+        ttk.Checkbutton(upd, text=t("chk_updates"), variable=self.upd_var).pack(side="left")
+        ttk.Button(upd, text=t("btn_check_updates"),
+                   command=lambda: self.app.check_updates(manual=True)).pack(side="right")
+        ttk.Label(upd, text=t("lbl_version", version.VERSION),
+                  foreground=self.pal["muted"]).pack(side="right", padx=10)
+
         # --- мишка ---
         mouse = ttk.LabelFrame(outer, text=t("grp_mouse"), padding=8)
         mouse.pack(fill="x", pady=(8, 0))
@@ -633,6 +651,7 @@ class SettingsWindow:
             "language": _value_for(LANG_KEYS, self.lang_var.get()),
             "window_theme": _value_for(THEME_KEYS, self.theme_var.get()),
             "widget_enabled": bool(self.widget_var.get()),
+            "check_updates": bool(self.upd_var.get()),
         })
         try:
             hr.save_config(updates)

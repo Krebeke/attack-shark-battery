@@ -10,7 +10,10 @@ import ctypes
 import logging
 import logging.handlers
 import os
+import sys
+import threading
 import time
+import webbrowser
 
 import pystray
 from pystray import Menu
@@ -19,6 +22,7 @@ from pystray import MenuItem as Item
 import hidreader as hr
 import i18n
 import iconrender
+import updater
 import winutil
 from i18n import t
 from service import BatteryService
@@ -36,6 +40,9 @@ class App:
         self.first_state = True
         self.last_view = None
         self.style = iconrender.icon_style(self._cfg())
+        self.update_info = None
+        self.update_notified = None
+        self.stop_evt = threading.Event()
 
         self.mgr = UiManager(self)
         self.service = BatteryService(self.on_state)
@@ -54,7 +61,13 @@ class App:
 
     # ── меню ──
     def build_menu(self):
+        info = self.update_info
+        update_items = ()
+        if info:
+            update_items = (Item(t("menu_update", info["version"]),
+                                 lambda i, it: self.mgr.call("confirm_update", info)),)
         return Menu(
+            *update_items,
             Item(t("menu_open"), lambda i, it: self.mgr.call("open_main"), default=True),
             Item(t("menu_refresh"), lambda i, it: self.service.refresh()),
             Item(t("menu_settings"), lambda i, it: self.mgr.call("open_settings")),
@@ -94,8 +107,57 @@ class App:
         icon.update_menu()
 
     def on_quit(self, icon, item):
+        self.stop_evt.set()
         self.service.stop()
         icon.stop()
+
+    # ── оновлення ──
+    def check_updates(self, manual=False):
+        """Перевірка оновлень у фоні. manual=True — повідомляти і про «все актуально»/помилку."""
+        def work():
+            try:
+                info = updater.check(self._cfg().get("update_repo", ""))
+            except Exception as e:
+                LOG.info("перевірка оновлень не вдалась: %s", e)
+                if manual:
+                    self.notify(t("notif_upd_failed"))
+                return
+            self.update_info = info
+            self.refresh_menu()
+            if info:
+                if manual or self.update_notified != info["version"]:
+                    self.update_notified = info["version"]
+                    self.notify(t("notif_update", info["version"]))
+            elif manual:
+                self.notify(t("notif_uptodate"))
+        threading.Thread(target=work, name="update-check", daemon=True).start()
+
+    def update_loop(self):
+        if self.stop_evt.wait(90):  # не заважаємо запуску
+            return
+        while not self.stop_evt.is_set():
+            cfg = self._cfg()
+            if cfg.get("check_updates", True):
+                self.check_updates(manual=False)
+            hours = max(1, hr.to_int(cfg.get("update_check_hours"), 24))
+            if self.stop_evt.wait(hours * 3600):
+                return
+
+    def apply_update(self, info):
+        """Викликається після підтвердження в UI: завантажити й запустити інсталятор."""
+        def work():
+            try:
+                if not getattr(sys, "frozen", False):
+                    webbrowser.open(info.get("page") or "https://github.com")  # зі скриптів — лише сторінка релізу
+                    return
+                self.notify(t("notif_upd_download", info["version"]))
+                path = updater.download(info)
+                updater.launch_installer(path)
+                self.on_quit(self.icon, None)
+            except Exception as e:
+                LOG.exception("оновлення не вдалось")
+                self.notify(t("notif_upd_failed"))
+        threading.Thread(target=work, name="update-apply", daemon=True).start()
 
     # ── іконка ──
     def show_icon(self, text, percent, tooltip, color=None):
@@ -175,6 +237,7 @@ class App:
     # ── запуск ──
     def run(self):
         self.service.start()
+        threading.Thread(target=self.update_loop, name="update-loop", daemon=True).start()
         if self._cfg().get("widget_enabled"):
             self.mgr.call("sync_widget")
         try:

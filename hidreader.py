@@ -73,6 +73,9 @@ DEFAULT_CONFIG = {
     "low_reminder_minutes": 30, # повторне нагадування про низький заряд (0 = вимкнено)
     "idle_after_seconds": 300,  # якщо за ПК нікого стільки секунд — опитувати рідше (0 = вимкнено)
     "idle_poll_seconds": 600,   # період опитування в режимі простою
+    "check_updates": True,      # перевіряти нові версії на GitHub (api.github.com)
+    "update_check_hours": 24,
+    "update_repo": "Krebeke/attack-shark-battery",
     "icon_style": "windows",    # windows | colored (решта icon_* — перевизначення пресета)
     "debug": False,
 }

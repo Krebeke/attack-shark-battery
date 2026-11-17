@@ -3,7 +3,9 @@
 
 #define AppName "Attack Shark Battery"
 #define AppExe  "AttackSharkBattery.exe"
-#define AppVer  "1.0.0"
+#ifndef AppVer
+  #define AppVer "1.1.0"
+#endif
 
 [Setup]
 AppId={{6E1B7C2A-4F3D-4B8E-9A55-A7D0C1E5B2F1}
@@ -47,6 +49,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Запустити {#AppName}"; Flags: nowait postinstall skipifsilent
+; після тихого оновлення (з самої програми) запускаємо нову версію автоматично
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillApp"

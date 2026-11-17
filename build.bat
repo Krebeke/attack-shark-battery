@@ -25,6 +25,8 @@ copy /Y config.json dist\AttackSharkBattery\config.default.json >nul
 echo.
 echo [1/2] Готово: dist\AttackSharkBattery\AttackSharkBattery.exe
 
+for /f %%v in ('%PY% -c "import version;print(version.VERSION)"') do set VER=%%v
+
 set ISCC=
 where iscc >nul 2>nul && set ISCC=iscc
 if not defined ISCC if exist "%LocalAppData%\Programs\Inno Setup 6\ISCC.exe" set ISCC="%LocalAppData%\Programs\Inno Setup 6\ISCC.exe"
@@ -32,7 +34,7 @@ if not defined ISCC if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set ISC
 if not defined ISCC if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set ISCC="%ProgramFiles%\Inno Setup 6\ISCC.exe"
 
 if defined ISCC (
-  %ISCC% installer.iss || goto :err
+  %ISCC% /DAppVer=%VER% installer.iss || goto :err
   echo [2/2] Готово: installer_output\AttackSharkBattery-Setup.exe
 ) else (
   echo [2/2] Inno Setup не знайдено - інсталятор не зібрано.

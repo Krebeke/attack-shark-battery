@@ -42,5 +42,8 @@
   "notify_full": true,
   "low_reminder_minutes": 30,
   "idle_after_seconds": 300,
-  "idle_poll_seconds": 600
+  "idle_poll_seconds": 600,
+  "check_updates": true,
+  "update_check_hours": 24,
+  "update_repo": "Krebeke/attack-shark-battery"
 }
