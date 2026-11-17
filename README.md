@@ -1,156 +1,90 @@
 # Attack Shark Battery
 
-Заряд мишки Attack Shark у треї Windows 10/11: цифри в іконці, підказка, головне вікно з графіком і оцінкою
-часу роботи, міні-віджет поверх екрана, налаштування з живим переглядом, укр/англ, світла/темна тема,
-сповіщення, автозапуск, інсталятор. Без прав адміністратора.
+Battery level of your **Attack Shark** wireless mouse, shown as digits in the Windows 10/11 tray.
+Lightweight, no admin rights, works without the official driver running.
 
-Підтверджено на **Attack Shark X11** через 2.4G-ресивер (`1D57:FA60`): ресивер сам кожні ~2 с шле
-input-репорт `03 55 40 01 39` (байт 4 = відсоток); `03 55 01 …` — мишка спить.
+🇺🇦 **Українською: [інструкція](ІНСТРУКЦІЯ.md)** · 🇬🇧 **Full guide: [GUIDE.md](GUIDE.md)**
 
-> 📘 **User guide in English (install, usage, troubleshooting, releasing): [GUIDE.md](GUIDE.md)**
+## Download
 
-## Можливості
+**[⬇ Latest release](https://github.com/Krebeke/attack-shark-battery/releases/latest)**: download
+`AttackSharkBattery-Setup.exe` and run it. If Windows says "Windows protected your PC", click
+**More info → Run anyway** (the app isn't code-signed).
 
-- **Іконка в треї**: цифри заряду (стиль «як у Windows» або кольоровий). Підказка — «Attack Shark X11: 57%».
-  Клік — головне вікно; права кнопка — меню (Оновити, Налаштування, Міні-віджет, Автозапуск, Вихід).
-- **Стани**: заряд / «Мишка спить» (ресивер на зв'язку, мишка ні — іконка сіра з останнім зарядом) /
-  «Мишку не знайдено» (вимкнена, ресивер не бачить).
-- **Головне вікно**: велика цифра, смуга, статус зарядки, «Залишилось ≈ N год», графік 24 год / 7 / 30 днів,
-  **експорт історії в CSV**.
-- **Міні-віджет** (меню трею або Налаштування → «Віджет»): плаваюча панель поверх екрана.
-  Три розміри (лише цифри / цифри + шкала / з міні-графіком за 24 год), **масштаб колесом миші** над
-  віджетом (70–250%), прозорість, **прилипання до країв екрана** (з урахуванням панелі завдань і кількох
-  моніторів), режим **«кліки крізь віджет»** (вимикається в меню значка), **автоприховування в
-  повноекранних іграх і відео**, червона рамка й цифри, коли заряд нижче порога. Перетягується,
-  запам'ятовує місце; права кнопка — меню, подвійний клік — головне вікно.
-  Режим **«Прикріплений до робочого столу»** (`widget_mode: desktop`): віджет лежить під усіма вікнами, як гаджет.
-- **Кілька мишок** (Налаштування → «Мишки»): список мишок, кожна з власною назвою, зарядом, історією й
-  сповіщеннями. Іконка в треї показує мишку з найменшим зарядом, підказка — усі. У головному вікні —
-  перемикач мишок, у віджеті — по рядку на кожну, CSV-експорт містить усі. «Додати знайдену» — відомі моделі;
-  «Додати нову (навчання)…» — майстер пошуку для будь-якої іншої. Дві **однакові** мишки розрізняються
-  лише за серійним номером ресивера (`serial` у `config.json`, якщо ресивери його мають).
-- **Сповіщення**: нижче порога (за замовчуванням 15%) + повторне нагадування кожні N хв, поки не поставили
-  на зарядку; «Заряд 100% — можна відключати».
-- **Налаштування**: стиль/шрифт/колір/контур/висота цифр з переглядом, період опитування, пороги, мова
-  (авто/українська/English), тема вікон (авто/світла/темна), автозапуск, автопошук мишки.
-- **Пошук мишки** (Налаштування → «Знайти мишку…»): відомі моделі; навчання за відсотком із драйвера;
-  навчання **статусу зарядки** (запис без зарядки / на зарядці → програма знаходить байт).
+## Features
 
-## Ресурси (легка програма)
+- **Tray icon with the battery %**: Windows-style or colored digits, tooltip with charging status.
+  A gray icon means the mouse is asleep, and `--` means it's off.
+- **Main window**: big number, estimated time left, history graph (24 h / 7 / 30 days), CSV export.
+- **Floating widget**: three sizes, resize with the mouse wheel, opacity, snaps to screen edges.
+  It can stay always on top or be pinned to the desktop, supports click-through and hides in
+  fullscreen games.
+- **Notifications**: low battery with reminders, and "fully charged".
+- **Multiple mice**: the tray shows the lowest battery, and each mouse gets its own history and alerts.
+- **Mouse finder**: picks up known models automatically, or learns a new mouse from the percentage
+  shown in the official app.
+- **Auto-update** from GitHub Releases (SHA-256 verified, can be turned off).
+- Ukrainian / English, light / dark theme, start with Windows.
+- **Light on resources**: the UI thread exists only while a window is open, and polling slows down
+  when you're away. Real RAM/CPU usage is shown in Settings.
 
-- **Інтерфейс живе лише поки відкрите вікно.** Закрили всі вікна — потік tkinter завершується, і в пам'яті
-  лишаються тільки трей та опитування. Орієнтовно ~25–40 МБ у фоні, ~50–70 МБ з відкритим вікном;
-  CPU ≈ 0%. Це оцінка: **реальні цифри (RAM і середній CPU) видно внизу вікна налаштувань**.
-- **Адаптивне опитування**: якщо за комп'ютером нікого (немає вводу 5 хв, і жодне вікно не відкрите),
-  опитування сповільнюється з 60 с до 10 хв; щойно ви повернулись — миттєве оновлення. Налаштовується
-  (`idle_after_seconds`, `idle_poll_seconds`).
-- Потік опитування спить між перевірками, читання HID блокуюче, конфіг кешується, значок
-  перемальовується лише коли змінився вигляд, збірка `--onedir` (швидкий старт, один процес).
+## Supported mice
 
-## Де що зберігається
+| Model | Connection | Status |
+|---|---|---|
+| Attack Shark X11 | 2.4G receiver `1D57:FA60` | ✅ Confirmed |
+| Other Attack Shark models | — | Try the built-in learning wizard (Settings → Mice → Find mouse…) |
 
-`%APPDATA%\AttackSharkBattery\` — `config.json`, `history.csv` (30 днів), `battery.log`.
-При першому запуску `config.json` копіюється з папки програми; нові ключі відомої мишки
-додаються автоматично. Деінсталяція ці дані не видаляє.
+Have another model working, or not working? Open an
+[issue](https://github.com/Krebeke/attack-shark-battery/issues). A USBPcap capture (`.pcapng`) helps
+add a profile.
 
-## Запуск із вихідного коду
+## How it works (X11)
+
+The receiver sends an HID input report on interface 2 (usage page `0x000A`) every ~2 seconds:
+`03 55 40 01 39`, where byte 4 is the battery percentage (`0x39` = 57%). A report starting with
+`03 55 01` means the mouse is asleep. The app only listens and never sends commands to the mouse.
+
+## Configuration
+
+Settings live in `%APPDATA%\AttackSharkBattery\config.json` (along with `history.csv` and
+`battery.log`). Almost everything is editable in the Settings window. Main keys:
+
+| Key | Meaning |
+|---|---|
+| `vid`, `pid`, `usage_page`, `usage`, `interface_number`, `serial` | Which HID interface to read |
+| `method` | `input`, `feature`, `feature_get`, `output_input` |
+| `request_hex`, `response_prefix_hex`, `sleep_prefix_hex` | Request bytes, expected reply prefix, "asleep" prefix |
+| `battery_byte_index`, `battery_mask`, `battery_raw_max` | Where the battery byte is |
+| `charging_byte_index`, `charging_mask`, `charging_value` | Charging flag (`null` = unknown) |
+| `poll_seconds`, `idle_after_seconds`, `idle_poll_seconds` | Polling and idle slowdown |
+| `low_battery_percent`, `low_reminder_minutes`, `notify_full` | Notifications |
+| `widget_*` | Widget mode, size, scale, opacity, snapping, click-through, fullscreen hiding |
+| `extra_mice` | Additional mice (same device keys plus `name`) |
+| `icon_style`, `icon_*` | Tray icon look |
+| `check_updates`, `update_repo` | Auto-update |
+
+## Building from source
+
+Requirements: Python 3 and [Inno Setup 6](https://jrsoftware.org/isdl.php) (for the installer).
 
 ```
-cd attack_shark_tray
+python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
-python tray_battery.py
+python tray_battery.py          # run from source
+build.bat                       # build dist\ and installer_output\AttackSharkBattery-Setup.exe
 ```
 
-## Збірка .exe та інсталятора
+`find_device.py` is a console helper to list HID devices and test reading (`list`, `probe`, `listen`).
 
-1. Для `Setup.exe` встановіть **Inno Setup 6** (https://jrsoftware.org/isdl.php).
-2. Запустіть `build.bat`:
-   - `dist\AttackSharkBattery\AttackSharkBattery.exe` — програма (папка цілком);
-   - `installer_output\AttackSharkBattery-Setup.exe` — інсталятор (його й передавайте іншим).
-3. Інсталятор ставить у `%LOCALAPPDATA%\Programs\AttackSharkBattery`, додає ярлик у «Пуск»,
-   за бажанням автозапуск і ярлик на столі; видалення — «Параметри → Програми».
+The release procedure is described in [GUIDE.md](GUIDE.md#releasing-a-new-version).
 
-Якщо Inno Setup скаржиться на `Ukrainian.isl`, приберіть у `installer.iss` рядок мови `ukrainian`.
+## Privacy
 
-## Структура коду
+The only network access is the daily update check to `api.github.com` (and the download from
+`github.com` when you accept an update). No data about you or your mouse is sent anywhere.
 
-| Файл | Призначення |
-|---|---|
-| `tray_battery.py` | Точка входу: трей, сповіщення |
-| `uimanager.py` | Ліниве керування потоком інтерфейсу |
-| `ui.py` | Вікна (tkinter): головне, налаштування, майстер, віджет |
-| `service.py` | Опитування, адаптивний інтервал, автовизначення |
-| `updater.py`, `version.py` | Перевірка й встановлення оновлень, номер версії |
-| `detect.py` | Відомі моделі, навчання (відсоток, зарядка) |
-| `history.py` | Історія (CSV), оцінка часу, експорт |
-| `i18n.py`, `theme.py`, `iconrender.py`, `winutil.py`, `hidreader.py` | Мови, теми, іконка, Windows-утиліти, читання HID |
-| `find_device.py` | Діагностика: `list`, `probe`, `listen` |
+## Disclaimer
 
-## Діагностика
-
-```
-python find_device.py list      # усі HID-інтерфейси
-python find_device.py probe     # зчитати заряд за поточним конфігом
-python find_device.py listen    # показати вхідні репорти
-```
-
-`"debug": true` у конфігу пише сирі відповіді в `battery.log`.
-
-## Статус «заряджається»
-
-Налаштування → «Знайти мишку…» → розділ 3: запишіть «без зарядки», поставте мишку на зарядку, запишіть
-«на зарядці». Якщо при зарядці **кабелем** мишка переходить у дротовий режим, ресивер мовчить — тоді
-статус через ресивер недоступний; спробуйте зарядку на док-станції (X11 має магнітну).
-
-## Інша модель мишки
-
-Налаштування → «Знайти мишку…» → розділ 2 (навчання за відсотком) працює, якщо мишка/ресивер **самі**
-періодично шлють заряд. Якщо заряд віддається лише у відповідь на запит, потрібен дамп USBPcap:
-Wireshark з USBPcap, захоплення під час роботи офіційного драйвера, фільтр
-`usb.device_address == N && usb.data_len > 0`, пошук байта зі значенням заряду (87% = `0x57`).
-Впишіть у `config.json`: `method`, `request_hex`, `battery_byte_index`.
-
-## config.json: основні ключі
-
-| Ключ | Значення |
-|---|---|
-| `model_name` | Назва для підказки |
-| `vid`, `pid`, `usage_page`, `usage`, `interface_number` | Який HID-інтерфейс читати |
-| `method` | `input`, `feature`, `feature_get`, `output_input` |
-| `response_prefix_hex`, `sleep_prefix_hex` | Початок «живого» репорта і репорта «мишка спить» |
-| `battery_byte_index`, `battery_mask`, `battery_raw_max` | Де байт заряду |
-| `charging_byte_index`, `charging_mask`, `charging_value` | Прапорець зарядки (`null` = невідомо) |
-| `poll_seconds`, `idle_after_seconds`, `idle_poll_seconds` | Опитування, простій |
-| `low_battery_percent`, `low_reminder_minutes`, `notify_full` | Сповіщення |
-| `language`, `window_theme`, `widget_enabled` | Мова, тема, віджет |
-| `widget_size` (`compact`/`bar`/`graph`), `widget_scale`, `widget_opacity`, `widget_snap`, `widget_clickthrough`, `widget_hide_fullscreen`, `widget_red_low` | Віджет |
-| `extra_mice` | Додаткові мишки: список об'єктів із тими ж ключами пристрою (`vid`, `pid`, `method`, …, `name`, `serial`); керується з вікна налаштувань |
-| `icon_style` та `icon_*` | Вигляд іконки |
-
-## Оновлення (GitHub Releases)
-
-- Програма раз на 24 год (і за кнопкою «Перевірити зараз» у налаштуваннях) питає
-  `api.github.com` про останній реліз репозиторію з `update_repo` (за замовчуванням
-  `Krebeke/attack-shark-battery`). Це **єдине використання інтернету**; жодних даних про вас чи мишку
-  не надсилається. Вимкнути: Налаштування → «Перевіряти нові версії на GitHub» або `"check_updates": false`.
-- Якщо є новіша версія, у меню значка з'являється пункт «Оновити до X.Y.Z…». Після підтвердження
-  інсталятор завантажується з github.com, перевіряється за розміром і SHA-256, запускається тихо
-  (без прав адміністратора), програма перезапускається вже нова. Налаштування й історія зберігаються.
-- Оновлення працює, лише коли програма встановлена інсталятором (з вихідного коду відкриється сторінка релізу).
-- Версія `1.0.0` (без цієї функції) оновлюється вручну: встановіть новий `Setup.exe` поверх.
-
-### Як випустити нову версію (для автора)
-
-1. Змініть `VERSION` у `version.py` (наприклад, `1.2.0`).
-2. Запустіть `build.bat` — версія потрапить в інсталятор автоматично.
-3. На GitHub: Releases → Create a new release → тег `v1.2.0` → прикріпіть
-   `installer_output\AttackSharkBattery-Setup.exe` (назва має закінчуватися на `Setup.exe`) → Publish.
-   Користувачі побачать пропозицію оновитись протягом доби.
-
-## Проблеми
-
-- **Іконки не видно** — перетягніть її зі стрілки `^` на панель.
-- **Антивірус лає .exe** — типово для PyInstaller; додайте у винятки.
-- **Немає сповіщень** — перевірте «Фокусування» і налаштування сповіщень Windows.
-- **«Програма вже запущена»** — шукайте значок біля годинника; завершити — «Вихід» у меню іконки.
+Unofficial project, not affiliated with Attack Shark.
