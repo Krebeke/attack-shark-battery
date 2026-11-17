@@ -301,6 +301,17 @@ def toplevel_hwnd(widget):
         return 0
 
 
+def send_to_bottom(hwnd):
+    """Опускає вікно під усі інші (віджет «на робочому столі»), не забираючи фокус."""
+    try:
+        user32 = ctypes.windll.user32
+        user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+        return bool(user32.SetWindowPos(hwnd, 1, 0, 0, 0, 0, 0x13))  # HWND_BOTTOM, NOSIZE|NOMOVE|NOACTIVATE
+    except Exception:
+        return False
+
+
 def set_click_through(hwnd, enable):
     """Клікі проходять крізь вікно (WS_EX_TRANSPARENT), коли enable=True. Повертає True, якщо вдалось."""
     try:

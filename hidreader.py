@@ -77,6 +77,7 @@ DEFAULT_CONFIG = {
     "update_check_hours": 24,
     "update_repo": "Krebeke/attack-shark-battery",
     "icon_style": "windows",    # windows | colored (решта icon_* — перевизначення пресета)
+    "widget_mode": "top",       # top (поверх усіх вікон) | desktop (прикріплений до робочого столу)
     "widget_size": "bar",       # compact | bar | graph
     "widget_scale": 1.0,        # 0.7 … 2.5 (колесо миші над віджетом)
     "widget_opacity": 0.93,     # 0.3 … 1.0

@@ -351,6 +351,7 @@ class MainWindow:
 
 # ═════════════════════════ міні-віджет ═════════════════════════
 
+WIDGET_MODES = [("wmode_top", "top"), ("wmode_desktop", "desktop")]
 WIDGET_SIZES = [("wsize_compact", "compact"), ("wsize_bar", "bar"), ("wsize_graph", "graph")]
 
 
@@ -377,7 +378,7 @@ class MiniWidget:
         self.scale = 1.0
         self.win = tk.Toplevel(mgr.root)
         self.win.overrideredirect(True)
-        self.win.attributes("-topmost", True)
+        self.win.attributes("-topmost", self._on_top())
 
         self.menu = tk.Menu(self.win, tearoff=0)
         self.menu.add_command(label=t("w_open"), command=lambda: open_main(self.mgr))
@@ -394,6 +395,16 @@ class MiniWidget:
         self._place(x, y)
         self._apply_flags()
         self._tick()
+
+    def _on_top(self):
+        return str(self.cfg.get("widget_mode", "top")).lower() != "desktop"
+
+    def _lower(self):
+        """У режимі «на робочому столі» тримає віджет під усіма вікнами."""
+        if not self._on_top():
+            hwnd = winutil.toplevel_hwnd(self.win)
+            if hwnd:
+                winutil.send_to_bottom(hwnd)
 
     # --- геометрія ---
     def _bounds(self):
@@ -493,9 +504,14 @@ class MiniWidget:
             self.win.attributes("-alpha", alpha)
         except tk.TclError:
             pass
+        try:
+            self.win.attributes("-topmost", self._on_top())
+        except tk.TclError:
+            pass
         hwnd = winutil.toplevel_hwnd(self.win)
         if hwnd:
             winutil.set_click_through(hwnd, bool(self.cfg.get("widget_clickthrough")))
+        self._lower()
 
     def apply_config(self):
         """Перечитує налаштування (з меню значка чи вікна налаштувань) і перебудовує віджет."""
@@ -582,6 +598,7 @@ class MiniWidget:
 
     def _release(self, e):
         self._snap()
+        self._lower()
         try:
             hr.save_config({"widget_x": self.win.winfo_x(), "widget_y": self.win.winfo_y()})
         except OSError:
@@ -603,6 +620,13 @@ class MiniWidget:
     def _tick(self):
         """Кожні 2 с: ховає віджет у повноекранних програмах і не дає іншим вікнам його перекрити."""
         try:
+            if not self._on_top():       # на робочому столі: лише тримаємо внизу, ховати не треба
+                if self.hidden:
+                    self.win.deiconify()
+                    self.hidden = False
+                self._lower()
+                self._after = self.win.after(2000, self._tick)
+                return
             fs = bool(self.cfg.get("widget_hide_fullscreen", True)) and winutil.foreground_fullscreen()
             if fs and not self.hidden:
                 self.win.withdraw()
@@ -817,6 +841,10 @@ class SettingsWindow:
         self.widget_var = tk.BooleanVar(value=bool(cfg.get("widget_enabled", False)))
         ttk.Checkbutton(wbox, text=t("chk_widget"), variable=self.widget_var).grid(
             row=0, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Label(wbox, text=t("lbl_wmode")).grid(row=9, column=0, sticky="w", **pad)
+        self.wmode_var = tk.StringVar(value=_label_for(WIDGET_MODES, str(cfg.get("widget_mode", "top")).lower()))
+        ttk.Combobox(wbox, textvariable=self.wmode_var, state="readonly", width=34,
+                     values=[t(k) for k, _ in WIDGET_MODES]).grid(row=9, column=1, sticky="w", **pad)
         ttk.Label(wbox, text=t("lbl_wsize")).grid(row=1, column=0, sticky="w", **pad)
         self.wsize_var = tk.StringVar(value=_label_for(WIDGET_SIZES, str(cfg.get("widget_size", "bar")).lower(), 1))
         ttk.Combobox(wbox, textvariable=self.wsize_var, state="readonly", width=34,
@@ -846,7 +874,7 @@ class SettingsWindow:
             ttk.Checkbutton(wbox, text=t(key), variable=var).grid(
                 row=row, column=0, columnspan=2, sticky="w", **pad)
         ttk.Label(wbox, text=t("widget_hint"), wraplength=520, justify="left",
-                  foreground=self.pal["muted"]).grid(row=8, column=0, columnspan=2, sticky="w", **pad)
+                  foreground=self.pal["muted"]).grid(row=10, column=0, columnspan=2, sticky="w", **pad)
         self._wlabels()
 
         # --- мишки ---
@@ -1028,6 +1056,7 @@ class SettingsWindow:
             "language": _value_for(LANG_KEYS, self.lang_var.get()),
             "window_theme": _value_for(THEME_KEYS, self.theme_var.get()),
             "widget_enabled": bool(self.widget_var.get()),
+            "widget_mode": _value_for(WIDGET_MODES, self.wmode_var.get()),
             "widget_size": _value_for(WIDGET_SIZES, self.wsize_var.get()),
             "widget_scale": round(float(self.wscale_var.get()), 2),
             "widget_opacity": round(float(self.wopacity_var.get()), 2),
