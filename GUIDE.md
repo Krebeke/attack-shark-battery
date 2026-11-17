@@ -185,4 +185,4 @@ Otherwise the app won't see it.
 | `find_device.py` | Console tool: list HID devices, test reading |
 | `build.bat`, `installer.iss` | Building the .exe and the installer |
 
-Technical details (`config.json` keys, X11 protocol) are in [README.md](README.md) .
+Technical details (`config.json` keys, X11 protocol) are in [README.md](README.md).
