@@ -52,6 +52,10 @@ def apply(root, style, pal, dark):
               selectbackground=[("readonly", field)], selectforeground=[("readonly", fg)])
     style.configure("TSpinbox", fieldbackground=field, background=pal["btn"], foreground=fg,
                     arrowcolor=fg, bordercolor=border)
+    style.configure("TNotebook", background=bg, bordercolor=border, tabmargins=(0, 2, 0, 0))
+    style.configure("TNotebook.Tab", background=pal["btn"], foreground=fg, bordercolor=border, padding=(14, 5))
+    style.map("TNotebook.Tab", background=[("selected", bg), ("active", pal["btn_active"])],
+              foreground=[("selected", fg)])
     style.configure("TEntry", fieldbackground=field, foreground=fg, bordercolor=border)
     style.configure("Horizontal.TScale", background=bg, troughcolor=field)
     style.configure("Horizontal.TProgressbar", background=pal["accent"], troughcolor=field, bordercolor=border)

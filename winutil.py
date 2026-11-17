@@ -202,3 +202,114 @@ def list_fonts():
     if not result:
         return list(FALLBACK_FONTS)
     return sorted(result.items(), key=lambda kv: kv[0].lower())
+
+
+# ───────── віконні допоміжні функції для віджета ─────────
+
+def virtual_screen():
+    """(x, y, ширина, висота) усіх моніторів разом або None."""
+    try:
+        gm = ctypes.windll.user32.GetSystemMetrics
+        w, h = gm(78), gm(79)
+        if w <= 0 or h <= 0:
+            return None
+        return gm(76), gm(77), w, h
+    except Exception:
+        return None
+
+
+def monitor_work_area(x, y):
+    """(left, top, right, bottom) робочої області монітора, що містить точку (без панелі завдань) або None."""
+    try:
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromPoint.restype = ctypes.c_void_p
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
+        mon = user32.MonitorFromPoint(wintypes.POINT(int(x), int(y)), 2)  # MONITOR_DEFAULTTONEAREST
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(info)
+        if not mon or not user32.GetMonitorInfoW(mon, ctypes.byref(info)):
+            return None
+        r = info.rcWork
+        return r.left, r.top, r.right, r.bottom
+    except Exception:
+        return None
+
+
+def foreground_fullscreen():
+    """True, якщо активне вікно чужої програми займає весь монітор без рамки (гра, відео на весь екран)."""
+    try:
+        from ctypes import wintypes
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                        ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = ctypes.c_void_p
+        user32.GetDesktopWindow.restype = ctypes.c_void_p
+        user32.GetShellWindow.restype = ctypes.c_void_p
+        user32.MonitorFromWindow.restype = ctypes.c_void_p
+        user32.MonitorFromWindow.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFO)]
+        user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.RECT)]
+        user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.GetClassNameW.argtypes = [ctypes.c_void_p, wintypes.LPWSTR, ctypes.c_int]
+        user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
+
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd or hwnd in (user32.GetDesktopWindow(), user32.GetShellWindow()):
+            return False
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls, 64)
+        if cls.value in ("Progman", "WorkerW", "Shell_TrayWnd"):
+            return False
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == os.getpid():
+            return False
+        if (user32.GetWindowLongW(hwnd, -16) & 0xC00000) == 0xC00000:  # WS_CAPTION → звичайне вікно
+            return False
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(info)
+        mon = user32.MonitorFromWindow(hwnd, 2)
+        if not mon or not user32.GetMonitorInfoW(mon, ctypes.byref(info)):
+            return False
+        m = info.rcMonitor
+        return rect.left <= m.left and rect.top <= m.top and rect.right >= m.right and rect.bottom >= m.bottom
+    except Exception:
+        return False
+
+
+def toplevel_hwnd(widget):
+    """HWND вікна верхнього рівня для tkinter-віджета (або 0)."""
+    try:
+        widget.update_idletasks()
+        hwnd = int(widget.winfo_id())
+        user32 = ctypes.windll.user32
+        user32.GetParent.restype = ctypes.c_void_p
+        parent = user32.GetParent(hwnd)
+        return int(parent or hwnd)
+    except Exception:
+        return 0
+
+
+def set_click_through(hwnd, enable):
+    """Клікі проходять крізь вікно (WS_EX_TRANSPARENT), коли enable=True. Повертає True, якщо вдалось."""
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+        style = user32.GetWindowLongW(hwnd, -20) | 0x80000  # WS_EX_LAYERED
+        style = (style | 0x20) if enable else (style & ~0x20)
+        user32.SetWindowLongW(hwnd, -20, style)
+        return True
+    except Exception:
+        return False

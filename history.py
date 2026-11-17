@@ -8,7 +8,7 @@ import hidreader as hr
 KEEP_DAYS = 30
 MIN_STEP_SECONDS = 600  # писати не частіше, ніж раз на 10 хв, якщо заряд не змінився
 
-_last = None  # (epoch, percent, charging)
+_last = {}  # device -> (epoch, percent, charging)
 
 
 def path():
@@ -19,23 +19,30 @@ def _ch(value):
     return "-" if value is None else ("1" if value else "0")
 
 
-def append(percent, charging, now=None, file=None):
+def _line(ts, pct, ch, device):
+    """Основна мишка (0) пишеться у старому форматі з 3 колонок, решта — з 4-ю (номер мишки)."""
+    if device:
+        return "%d,%d,%s,%d\n" % (ts, pct, _ch(ch), device)
+    return "%d,%d,%s\n" % (ts, pct, _ch(ch))
+
+
+def append(percent, charging, now=None, file=None, device=0):
     """Додає відлік, якщо змінився заряд/зарядка або минуло 10 хв."""
-    global _last
     now = now or time.time()
-    if _last and _last[1] == percent and _last[2] == charging and now - _last[0] < MIN_STEP_SECONDS:
+    last = _last.get(device)
+    if last and last[1] == percent and last[2] == charging and now - last[0] < MIN_STEP_SECONDS:
         return False
-    _last = (now, percent, charging)
+    _last[device] = (now, percent, charging)
     try:
         with open(file or path(), "a", encoding="utf-8") as f:
-            f.write("%d,%d,%s\n" % (now, percent, _ch(charging)))
+            f.write(_line(now, percent, charging, device))
         return True
     except OSError:
         return False
 
 
-def load(days=7, now=None, file=None):
-    """Повертає [(epoch, percent, charging|None)] за останні `days` днів."""
+def _rows(days, now=None, file=None):
+    """[(epoch, percent, charging|None, device)] усіх мишок за останні `days` днів."""
     now = now or time.time()
     since = now - days * 86400
     out = []
@@ -43,27 +50,33 @@ def load(days=7, now=None, file=None):
         with open(file or path(), encoding="utf-8") as f:
             for line in f:
                 parts = line.strip().split(",")
-                if len(parts) != 3:
+                if len(parts) not in (3, 4):
                     continue
                 try:
                     ts, pct = int(parts[0]), int(parts[1])
+                    dev = int(parts[3]) if len(parts) == 4 else 0
                 except ValueError:
                     continue
                 if ts >= since:
-                    out.append((ts, pct, None if parts[2] == "-" else parts[2] == "1"))
+                    out.append((ts, pct, None if parts[2] == "-" else parts[2] == "1", dev))
     except OSError:
         pass
     return out
 
 
+def load(days=7, now=None, file=None, device=0):
+    """Повертає [(epoch, percent, charging|None)] однієї мишки за останні `days` днів."""
+    return [(ts, pct, ch) for ts, pct, ch, dev in _rows(days, now, file) if dev == device]
+
+
 def prune(file=None, now=None):
     """Видаляє записи старші за KEEP_DAYS (викликається при старті)."""
     file = file or path()
-    rows = load(KEEP_DAYS, now=now, file=file)
+    rows = _rows(KEEP_DAYS, now=now, file=file)
     try:
         with open(file, "w", encoding="utf-8") as f:
-            for ts, pct, ch in rows:
-                f.write("%d,%d,%s\n" % (ts, pct, _ch(ch)))
+            for ts, pct, ch, dev in rows:
+                f.write(_line(ts, pct, ch, dev))
     except OSError:
         pass
 
@@ -101,12 +114,16 @@ def estimate_hours_left(samples):
     return max(0.0, ys[-1] / -slope)
 
 
-def export_csv(dest, days=KEEP_DAYS, file=None):
-    """Зберігає історію у CSV (UTF-8 з BOM, щоб Excel бачив кирилицю). Повертає кількість рядків."""
-    rows = load(days, file=file)
+def export_csv(dest, days=KEEP_DAYS, file=None, names=None):
+    """Зберігає історію всіх мишок у CSV (UTF-8 з BOM, щоб Excel бачив кирилицю).
+    names: {номер мишки: назва}. Повертає кількість рядків."""
+    rows = _rows(days, file=file)
+    names = names or {}
     with open(dest, "w", encoding="utf-8-sig", newline="") as f:
-        f.write("datetime,percent,charging\r\n")
-        for ts, pct, ch in rows:
+        f.write("datetime,percent,charging,mouse\r\n")
+        for ts, pct, ch, dev in rows:
             state = "" if ch is None else ("yes" if ch else "no")
-            f.write("%s,%d,%s\r\n" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)), pct, state))
+            name = str(names.get(dev, "mouse %d" % dev)).replace(",", " ")
+            f.write("%s,%d,%s,%s\r\n" % (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)),
+                                           pct, state, name))
     return len(rows)

@@ -95,6 +95,12 @@ def match_profiles():
     return found
 
 
+def new_known(dcfgs):
+    """Профілі підключених відомих мишок, яких ще нема серед налаштованих (dcfgs — device_configs)."""
+    return [p for p in match_profiles()
+            if not any(same_device(d, p["updates"]) for d in dcfgs)]
+
+
 def same_device(cfg, updates):
     try:
         return (hr.to_int(cfg["vid"]) == hr.to_int(updates["vid"]) and

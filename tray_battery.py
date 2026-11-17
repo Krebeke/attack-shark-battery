@@ -35,9 +35,7 @@ class App:
     def __init__(self):
         winutil.set_dpi_aware()
         self.lang = i18n.set_language(self._cfg().get("language", "auto"))
-        self.low_since = None
-        self.full_notified = False
-        self.first_state = True
+        self.notif = {}   # id мишки -> {"low_since", "full", "first"}
         self.last_view = None
         self.style = iconrender.icon_style(self._cfg())
         self.update_info = None
@@ -73,6 +71,9 @@ class App:
             Item(t("menu_settings"), lambda i, it: self.mgr.call("open_settings")),
             Item(t("menu_widget"), self.on_toggle_widget,
                  checked=lambda item: bool(self._cfg().get("widget_enabled"))),
+            Item(t("menu_clickthrough"), self.on_toggle_clickthrough,
+                 checked=lambda item: bool(self._cfg().get("widget_clickthrough")),
+                 visible=lambda item: bool(self._cfg().get("widget_enabled"))),
             Item(t("menu_autostart"), self.on_toggle_autostart,
                  checked=lambda item: winutil.autostart_enabled()),
             Menu.SEPARATOR,
@@ -97,6 +98,15 @@ class App:
             self.mgr.call("sync_widget")
         else:
             self.mgr.call_if_running("sync_widget")
+        icon.update_menu()
+
+    def on_toggle_clickthrough(self, icon, item):
+        try:
+            hr.save_config({"widget_clickthrough": not bool(self._cfg().get("widget_clickthrough"))})
+        except OSError:
+            LOG.exception("clickthrough")
+            return
+        self.mgr.call_if_running("sync_widget")
         icon.update_menu()
 
     def on_toggle_autostart(self, icon, item):
@@ -179,60 +189,87 @@ class App:
             LOG.exception("notify")
 
     # ── результат опитування (робочий потік) ──
-    def on_state(self, state, cfg):
+    @staticmethod
+    def _tip_line(name, st, with_name):
+        if st.ok:
+            if st.charging is None:
+                return "%s: %d%%" % (name, st.percent)
+            return "%s: %d%%, %s" % (name, st.percent,
+                                     t("tip_charging") if st.charging else t("tip_not_charging"))
+        if st.error == "asleep":
+            text = t("tip_asleep", st.percent) if st.percent is not None else t("tip_asleep_nopct")
+        elif st.error == "config":
+            text = t("tip_config")
+        else:
+            text = t("tip_not_found")
+        return ("%s: %s" % (name, text)) if with_name else text
+
+    def on_state(self, results, cfg):
+        """results = [(конфіг_мишки, State)]. Іконка показує мишку з найменшим зарядом."""
         lang = i18n.set_language(cfg.get("language", "auto"))
         if lang != self.lang:
             self.lang = lang
             self.refresh_menu()
         self.style = iconrender.icon_style(cfg)
-        model = ("Attack Shark %s" % cfg.get("model_name", "")).strip()
+        multi = len(results) > 1
 
-        if state.ok:
-            if state.charging is None:
-                tip = "%s: %d%%" % (model, state.percent)
+        lines = []
+        for dcfg, st in results:
+            name = hr.device_name(dcfg)
+            lines.append(self._tip_line(name, st, multi))
+            if st.ok:
+                self.handle_notifications(dcfg["_id"], name, multi, st, dcfg)
+        tip = "\n".join(lines)
+
+        ok = [st for _, st in results if st.ok]
+        asleep = [st for _, st in results if st.error == "asleep"]
+        if ok:
+            low = min(ok, key=lambda st: st.percent)
+            self.show_icon(str(low.percent), low.percent, tip)
+        elif asleep:
+            known = [st for st in asleep if st.percent is not None]
+            if known:
+                low = min(known, key=lambda st: st.percent)
+                self.show_icon(str(low.percent), None, tip, iconrender.GRAY)
             else:
-                tip = "%s: %d%%, %s" % (model, state.percent,
-                                        t("tip_charging") if state.charging else t("tip_not_charging"))
-            self.show_icon(str(state.percent), state.percent, tip)
-            self.handle_notifications(state, cfg)
-        elif state.error == "asleep":
-            if state.percent is not None:
-                self.show_icon(str(state.percent), None, t("tip_asleep", state.percent), iconrender.GRAY)
-            else:
-                self.show_icon("--", None, t("tip_asleep_nopct"), iconrender.GRAY)
-        elif state.error == "config":
-            self.show_icon("!", 0, t("tip_config"))
+                self.show_icon("--", None, tip, iconrender.GRAY)
+        elif any(st.error == "config" for _, st in results):
+            self.show_icon("!", 0, tip)
         else:
-            self.show_icon("--", None, t("tip_not_found"))
+            self.show_icon("--", None, tip)
 
-        self.mgr.call_if_running("update", state, cfg)
+        self.mgr.call_if_running("update", results, cfg)
 
-    def handle_notifications(self, state, cfg):
+    def handle_notifications(self, dev_id, name, multi, state, cfg):
+        ns = self.notif.setdefault(dev_id, {"low_since": None, "full": False, "first": True})
         pct = state.percent
         now = time.monotonic()
         charging = state.charging is True
         threshold = hr.to_int(cfg["low_battery_percent"], 15)
         remind = max(0, hr.to_int(cfg["low_reminder_minutes"], 30)) * 60
 
-        if pct < threshold and not charging:
-            if self.low_since is None:
-                self.notify(t("notif_low", pct))
-                self.low_since = now
-            elif remind and now - self.low_since >= remind:
-                self.notify(t("notif_low_again", pct))
-                self.low_since = now
-        elif pct >= threshold + 5 or charging:
-            self.low_since = None
+        def say(text):
+            self.notify(("%s: %s" % (name, text)) if multi else text)
 
-        if self.first_state and pct >= 100:
-            self.full_notified = True  # вже повна при старті — не сповіщаємо
+        if pct < threshold and not charging:
+            if ns["low_since"] is None:
+                say(t("notif_low", pct))
+                ns["low_since"] = now
+            elif remind and now - ns["low_since"] >= remind:
+                say(t("notif_low_again", pct))
+                ns["low_since"] = now
+        elif pct >= threshold + 5 or charging:
+            ns["low_since"] = None
+
+        if ns["first"] and pct >= 100:
+            ns["full"] = True  # вже повна при старті — не сповіщаємо
         elif cfg.get("notify_full", True):
-            if pct >= 100 and not self.full_notified and state.charging is not False:
-                self.notify(t("notif_full"))
-                self.full_notified = True
+            if pct >= 100 and not ns["full"] and state.charging is not False:
+                say(t("notif_full"))
+                ns["full"] = True
         if pct < 95:
-            self.full_notified = False
-        self.first_state = False
+            ns["full"] = False
+        ns["first"] = False
 
     # ── запуск ──
     def run(self):

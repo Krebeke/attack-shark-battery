@@ -8,7 +8,7 @@ import os
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from PIL import Image, ImageTk
 
@@ -20,6 +20,7 @@ import theme
 import version
 import winutil
 from i18n import set_language, t
+from service import EMPTY
 
 FONT = "Segoe UI"
 
@@ -107,12 +108,13 @@ def open_settings(mgr):
     mgr.windows["settings"] = SettingsWindow(mgr)
 
 
-def open_wizard(mgr, parent=None):
+def open_wizard(mgr, parent=None, target=0):
+    """target: 0 — основна мишка, k — k-та додаткова, -1 — нова мишка."""
     win = mgr.windows.get("wizard")
     if win is not None:
         win.top.lift()
         return
-    mgr.windows["wizard"] = WizardWindow(mgr, parent or mgr.root)
+    mgr.windows["wizard"] = WizardWindow(mgr, parent or mgr.root, target)
 
 
 def sync_widget(mgr):
@@ -122,6 +124,8 @@ def sync_widget(mgr):
         mgr.windows["widget"] = MiniWidget(mgr)
     elif not enabled and win is not None:
         win.destroy()
+    elif win is not None:
+        win.apply_config()
 
 
 def confirm_update(mgr, info):
@@ -131,12 +135,20 @@ def confirm_update(mgr, info):
         mgr.app.apply_update(info)
 
 
-def update(mgr, state, cfg):
+def current_results(mgr, cfg=None):
+    """Останні результати опитування; якщо їх ще нема — одна порожня мишка."""
+    results = list(getattr(mgr.app.service, "results", None) or [])
+    if not results:
+        results = [(dict(cfg or _cfg(), _id=0), EMPTY)]
+    return results
+
+
+def update(mgr, results, cfg):
     for name in ("main", "widget"):
         win = mgr.windows.get(name)
         if win is not None:
             try:
-                win.update_state(state, cfg)
+                win.update_state(results, cfg)
             except tk.TclError:
                 mgr.windows.pop(name, None)
 
@@ -158,8 +170,11 @@ class MainWindow:
         self.win.protocol("WM_DELETE_WINDOW", self.destroy)
         theme.dark_title_bar(self.win, mgr.dark)
         self._percent = None
+        self._dev = 0
+        self.sel = 0
+        self.results = []
         self._build()
-        self.update_state(self.app.service.state, self.app.service.cfg)
+        self.update_state(current_results(mgr), self.app.service.cfg)
 
     def _build(self):
         pal = self.pal
@@ -168,6 +183,13 @@ class MainWindow:
 
         self.model = ttk.Label(root, text="Attack Shark", font=(FONT, 13, "bold"))
         self.model.pack(anchor="w")
+
+        self.sel_frame = ttk.Frame(root)  # з'являється, лише коли мишок більше однієї
+        ttk.Label(self.sel_frame, text=t("lbl_mouse")).pack(side="left")
+        self.sel_var = tk.StringVar()
+        self.sel_combo = ttk.Combobox(self.sel_frame, textvariable=self.sel_var, state="readonly", width=34)
+        self.sel_combo.pack(side="left", padx=6)
+        self.sel_combo.bind("<<ComboboxSelected>>", self._on_select)
 
         top = ttk.Frame(root)
         top.pack(fill="x", pady=(6, 0))
@@ -230,14 +252,35 @@ class MainWindow:
         if not path:
             return
         try:
-            rows = history.export_csv(path)
+            names = {d["_id"]: hr.device_name(d) for d, _ in self.results}
+            rows = history.export_csv(path, names=names)
             messagebox.showinfo(t("main_title"), t("export_done", rows), parent=self.win)
         except OSError as e:
             messagebox.showerror(t("main_title"), t("export_error", e), parent=self.win)
 
     # --- дані ---
-    def update_state(self, state, cfg):
-        self.model.config(text=("Attack Shark %s" % cfg.get("model_name", "")).strip())
+    def _on_select(self, _evt=None):
+        names = [hr.device_name(d) for d, _ in self.results]
+        try:
+            self.sel = names.index(self.sel_var.get())
+        except ValueError:
+            self.sel = 0
+        self.update_state(self.results, _cfg())
+
+    def update_state(self, results, cfg):
+        self.results = results
+        self.sel = max(0, min(self.sel, len(results) - 1))
+        if len(results) > 1:
+            names = [hr.device_name(d) for d, _ in results]
+            self.sel_combo.config(values=names)
+            self.sel_var.set(names[self.sel])
+            if not self.sel_frame.winfo_ismapped():
+                self.sel_frame.pack(anchor="w", pady=(4, 0), after=self.model)
+        elif self.sel_frame.winfo_ismapped():
+            self.sel_frame.pack_forget()
+        dcfg, state = results[self.sel]
+        self._dev = dcfg["_id"]
+        self.model.config(text=hr.device_name(dcfg))
         percent = state.percent
         if state.ok:
             color = iconrender.status_color(percent)
@@ -251,7 +294,7 @@ class MainWindow:
         self.status.config(text=status_text(state))
         if state.ts:
             self.updated.config(text=t("updated", time.strftime("%H:%M:%S", time.localtime(state.ts))))
-        left = history.estimate_hours_left(history.load(2)) if state.ok else None
+        left = history.estimate_hours_left(history.load(2, device=self._dev)) if state.ok else None
         self.left.config(text=t("left", fmt_hours(left)))
         self._draw_bar()
         self.redraw_graph()
@@ -291,7 +334,7 @@ class MainWindow:
             c.create_text(X(ts), h - bottom + 8, text=time.strftime(fmt, time.localtime(ts)),
                           anchor="n", fill=pal["muted"], font=(FONT, 8))
 
-        samples = history.load(days, now)
+        samples = history.load(days, now, device=self._dev)
         if not samples:
             c.create_text(w / 2, h / 2, text=t("no_history"), fill=pal["muted"], font=(FONT, 10))
             return
@@ -308,71 +351,278 @@ class MainWindow:
 
 # ═════════════════════════ міні-віджет ═════════════════════════
 
+WIDGET_SIZES = [("wsize_compact", "compact"), ("wsize_bar", "bar"), ("wsize_graph", "graph")]
+
+
+def _clampf(value, lo, hi, default):
+    try:
+        return max(lo, min(hi, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
 class MiniWidget:
+    """Плаваюча панель поверх екрана: одна мишка або кілька, три розміри, масштаб колесом,
+    прозорість, прилипання до країв, «крізь клік», автоприховування в повноекранних програмах."""
+
     def __init__(self, mgr):
         self.mgr = mgr
         self.app = mgr.app
-        pal = mgr.pal
-        cfg = _cfg()
+        self.cfg = _cfg()
+        self.results = current_results(mgr, self.cfg)
+        self.hidden = False
+        self._after = None
+        self._dx = self._dy = 0
+        self.rows = []
+        self.scale = 1.0
         self.win = tk.Toplevel(mgr.root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
-        try:
-            self.win.attributes("-alpha", 0.93)
-        except tk.TclError:
-            pass
-        self.win.configure(bg=pal["border"])
-        inner = tk.Frame(self.win, bg=pal["bg"], padx=10, pady=6)
-        inner.pack(padx=1, pady=1)
-        self.pct = tk.Label(inner, text="--", font=(FONT, 22, "bold"), bg=pal["bg"], fg=pal["fg"])
-        self.pct.pack(side="left")
-        right = tk.Frame(inner, bg=pal["bg"])
-        right.pack(side="left", padx=(8, 0))
-        self.name = tk.Label(right, text="", font=(FONT, 8), bg=pal["bg"], fg=pal["muted"], anchor="w")
-        self.name.pack(anchor="w")
-        self.bar = tk.Canvas(right, width=72, height=6, bg=pal["bar_bg"], highlightthickness=0)
-        self.bar.pack(anchor="w", pady=2)
-        self.sub = tk.Label(right, text="", font=(FONT, 8), bg=pal["bg"], fg=pal["muted"], anchor="w")
-        self.sub.pack(anchor="w")
 
         self.menu = tk.Menu(self.win, tearoff=0)
         self.menu.add_command(label=t("w_open"), command=lambda: open_main(self.mgr))
         self.menu.add_command(label=t("btn_refresh"), command=self.app.service.refresh)
+        self.menu.add_command(label=t("w_click"), command=self.enable_click_through)
         self.menu.add_separator()
         self.menu.add_command(label=t("w_close"), command=self.disable)
 
-        self._dx = self._dy = 0
-        for widget in (self.win, inner, self.pct, right, self.name, self.bar, self.sub):
-            widget.bind("<ButtonPress-1>", self._press)
-            widget.bind("<B1-Motion>", self._drag)
-            widget.bind("<ButtonRelease-1>", self._release)
-            widget.bind("<Double-Button-1>", lambda e: open_main(self.mgr))
-            widget.bind("<Button-3>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
-
-        self.win.update_idletasks()
-        sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
-        x = cfg.get("widget_x")
-        y = cfg.get("widget_y")
+        self._build()
+        x, y = self.cfg.get("widget_x"), self.cfg.get("widget_y")
         if x is None or y is None:
-            x, y = sw - self.win.winfo_reqwidth() - 24, sh - self.win.winfo_reqheight() - 80
-        self.win.geometry("+%d+%d" % (self._clamp(x, sw), self._clamp(y, sh)))
-        self.update_state(self.app.service.state, cfg)
+            l, tp, r, b = self._bounds()
+            x, y = r - self.win.winfo_reqwidth() - 24, b - self.win.winfo_reqheight() - 80
+        self._place(x, y)
+        self._apply_flags()
+        self._tick()
 
-    @staticmethod
-    def _clamp(value, limit):
-        return max(0, min(int(value), max(0, limit - 40)))
+    # --- геометрія ---
+    def _bounds(self):
+        vs = winutil.virtual_screen()
+        if vs:
+            return vs[0], vs[1], vs[0] + vs[2], vs[1] + vs[3]
+        return 0, 0, self.win.winfo_screenwidth(), self.win.winfo_screenheight()
 
+    def _place(self, x, y):
+        self.win.update_idletasks()
+        l, tp, r, b = self._bounds()
+        w, h = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
+        x = max(l, min(int(x), r - w))
+        y = max(tp, min(int(y), b - h))
+        self.win.geometry("+%d+%d" % (x, y))
+
+    def _snap(self):
+        if not self.cfg.get("widget_snap", True):
+            return
+        self.win.update_idletasks()
+        x, y = self.win.winfo_x(), self.win.winfo_y()
+        w, h = self.win.winfo_width(), self.win.winfo_height()
+        area = winutil.monitor_work_area(x + w // 2, y + h // 2)
+        if not area:
+            area = (0, 0, self.win.winfo_screenwidth(), self.win.winfo_screenheight())
+        l, tp, r, b = area
+        thr, margin = 24, 8
+        if abs(x - l) <= thr:
+            x = l + margin
+        elif abs(r - (x + w)) <= thr:
+            x = r - w - margin
+        if abs(y - tp) <= thr:
+            y = tp + margin
+        elif abs(b - (y + h)) <= thr:
+            y = b - h - margin
+        self.win.geometry("+%d+%d" % (x, y))
+
+    # --- побудова ---
+    def _build(self):
+        pal = self.mgr.pal
+        cfg = self.cfg
+        for child in self.win.winfo_children():
+            child.destroy()
+        size = str(cfg.get("widget_size", "bar")).lower()
+        if size not in ("compact", "bar", "graph"):
+            size = "bar"
+        sc = _clampf(cfg.get("widget_scale", 1.0), 0.7, 2.5, 1.0)
+        self.scale, self.size = sc, size
+        multi = len(self.results) > 1
+        self.win.configure(bg=pal["border"])
+        inner = tk.Frame(self.win, bg=pal["bg"], padx=int(10 * sc), pady=int(6 * sc))
+        inner.pack(padx=2, pady=2)
+
+        small = (FONT, max(7, int(8 * sc)))
+        self.rows = []
+        for i, (dcfg, _) in enumerate(self.results):
+            row = tk.Frame(inner, bg=pal["bg"])
+            row.pack(anchor="w", pady=(0 if i == 0 else int(6 * sc), 0))
+            w = {"id": dcfg["_id"]}
+            w["pct"] = tk.Label(row, text="--", font=(FONT, max(9, int(22 * sc)), "bold"),
+                                bg=pal["bg"], fg=pal["fg"])
+            w["pct"].pack(side="left")
+            if size != "compact" or multi:
+                right = tk.Frame(row, bg=pal["bg"])
+                right.pack(side="left", padx=(int(8 * sc), 0))
+                w["name"] = tk.Label(right, text="", font=small, bg=pal["bg"], fg=pal["muted"], anchor="w")
+                w["name"].pack(anchor="w")
+                if size != "compact":
+                    w["bar_w"], w["bar_h"] = int(72 * sc), max(4, int(6 * sc))
+                    w["bar"] = tk.Canvas(right, width=w["bar_w"], height=w["bar_h"], bg=pal["bar_bg"],
+                                         highlightthickness=0)
+                    w["bar"].pack(anchor="w", pady=2)
+                    w["sub"] = tk.Label(right, text="", font=small, bg=pal["bg"], fg=pal["muted"], anchor="w")
+                    w["sub"].pack(anchor="w")
+            if size == "graph":
+                w["gw"], w["gh"] = int(120 * sc), int(34 * sc)
+                w["graph"] = tk.Canvas(row, width=w["gw"], height=w["gh"], bg=pal["graph_bg"],
+                                       highlightthickness=1, highlightbackground=pal["border"])
+                w["graph"].pack(side="left", padx=(int(8 * sc), 0))
+            self.rows.append(w)
+        self._bind_all(self.win)
+        self._paint()
+
+    def _bind_all(self, widget):
+        widget.bind("<ButtonPress-1>", self._press)
+        widget.bind("<B1-Motion>", self._drag)
+        widget.bind("<ButtonRelease-1>", self._release)
+        widget.bind("<Double-Button-1>", lambda e: open_main(self.mgr))
+        widget.bind("<Button-3>", lambda e: self.menu.tk_popup(e.x_root, e.y_root))
+        widget.bind("<MouseWheel>", self._wheel)
+        for child in widget.winfo_children():
+            self._bind_all(child)
+
+    def _apply_flags(self):
+        alpha = min(0.99, _clampf(self.cfg.get("widget_opacity", 0.93), 0.3, 1.0, 0.93))
+        try:
+            self.win.attributes("-alpha", alpha)
+        except tk.TclError:
+            pass
+        hwnd = winutil.toplevel_hwnd(self.win)
+        if hwnd:
+            winutil.set_click_through(hwnd, bool(self.cfg.get("widget_clickthrough")))
+
+    def apply_config(self):
+        """Перечитує налаштування (з меню значка чи вікна налаштувань) і перебудовує віджет."""
+        self.cfg = _cfg()
+        self.results = current_results(self.mgr, self.cfg)
+        self._build()
+        self._place(self.win.winfo_x(), self.win.winfo_y())
+        self._apply_flags()
+
+    # --- малювання ---
+    def _paint(self):
+        cfg, pal = self.cfg, self.mgr.pal
+        threshold = hr.to_int(cfg.get("low_battery_percent"), 15)
+        red_low = bool(cfg.get("widget_red_low", True))
+        any_low = False
+        for w, (dcfg, state) in zip(self.rows, self.results):
+            percent = state.percent
+            if state.ok:
+                color = iconrender.status_color(percent)
+            elif state.error == "asleep" and percent is not None:
+                color = iconrender.GRAY
+            else:
+                percent, color = None, iconrender.GRAY
+            low = state.ok and state.charging is not True and percent is not None and percent < threshold
+            if low and red_low:
+                color, any_low = iconrender.RED, True
+            text = "--" if percent is None else str(percent)
+            if self.size == "compact" and state.ok and state.charging:
+                text += " ⚡"
+            w["pct"].config(text=text, fg=hexcolor(color))
+            if "name" in w:
+                w["name"].config(text=hr.device_name(dcfg))
+            if "bar" in w:
+                bar = w["bar"]
+                bar.delete("all")
+                if percent is not None:
+                    bar.create_rectangle(0, 0, w["bar_w"] * percent / 100.0, w["bar_h"], outline="",
+                                         fill=hexcolor(color))
+            if "sub" in w:
+                if state.ok:
+                    sub = "⚡ " + t("tip_charging") if state.charging else ""
+                elif state.error == "asleep":
+                    sub = "z z z"
+                else:
+                    sub = t("tip_not_found")
+                w["sub"].config(text=sub)
+            if "graph" in w:
+                self._draw_graph(w, dcfg["_id"], state.ok and state.charging is True)
+        self.win.configure(bg=hexcolor(iconrender.RED) if any_low and red_low else pal["border"])
+
+    def _draw_graph(self, w, device, charging):
+        c, pal = w["graph"], self.mgr.pal
+        c.delete("all")
+        gw, gh = w["gw"], w["gh"]
+        now = time.time()
+        t0 = now - 86400
+        samples = history.load(1, now, device=device)
+        for p in (20, 50, 80):  # тонкі лінії-орієнтири
+            y = 3 + (100 - p) / 100.0 * (gh - 6)
+            c.create_line(0, y, gw, y, fill=pal["grid"])
+        if len(samples) < 2:
+            return
+        pts = []
+        prev = None
+        for ts, pct, ch in samples:
+            x = (ts - t0) / (now - t0) * (gw - 2) + 1
+            y = 3 + (100 - pct) / 100.0 * (gh - 6)
+            if prev is not None and ts - prev <= 3 * 3600:
+                pts.append((x, y))
+            else:
+                if len(pts) >= 2:
+                    c.create_line(*[v for p in pts for v in p], fill=pal["accent"], width=2)
+                pts = [(x, y)]
+            prev = ts
+        if len(pts) >= 2:
+            c.create_line(*[v for p in pts for v in p], fill="#2ecc71" if charging else pal["accent"], width=2)
+
+    # --- події ---
     def _press(self, e):
         self._dx, self._dy = e.x_root - self.win.winfo_x(), e.y_root - self.win.winfo_y()
 
     def _drag(self, e):
-        self.win.geometry("+%d+%d" % (e.x_root - self._dx, e.y_root - self._dy))
+        self._place(e.x_root - self._dx, e.y_root - self._dy)
 
     def _release(self, e):
+        self._snap()
         try:
             hr.save_config({"widget_x": self.win.winfo_x(), "widget_y": self.win.winfo_y()})
         except OSError:
             pass
+
+    def _wheel(self, e):
+        scale = round(_clampf(self.scale + (0.1 if e.delta > 0 else -0.1), 0.7, 2.5, 1.0), 2)
+        if abs(scale - self.scale) < 0.01:
+            return
+        try:
+            hr.save_config({"widget_scale": scale})
+        except OSError:
+            return
+        self.cfg = _cfg()
+        self._build()
+        self._place(self.win.winfo_x(), self.win.winfo_y())
+        self._snap()
+
+    def _tick(self):
+        """Кожні 2 с: ховає віджет у повноекранних програмах і не дає іншим вікнам його перекрити."""
+        try:
+            fs = bool(self.cfg.get("widget_hide_fullscreen", True)) and winutil.foreground_fullscreen()
+            if fs and not self.hidden:
+                self.win.withdraw()
+                self.hidden = True
+            elif not fs:
+                if self.hidden:
+                    self.win.deiconify()
+                    self.hidden = False
+                self.win.attributes("-topmost", True)
+            self._after = self.win.after(2000, self._tick)
+        except tk.TclError:
+            pass
+
+    def enable_click_through(self):
+        try:
+            hr.save_config({"widget_clickthrough": True})
+        except OSError:
+            return
+        self.cfg = _cfg()
+        self._apply_flags()
 
     def disable(self):
         try:
@@ -384,30 +634,21 @@ class MiniWidget:
     def destroy(self):
         self.mgr.windows.pop("widget", None)
         try:
+            if self._after:
+                self.win.after_cancel(self._after)
             self.win.destroy()
         except tk.TclError:
             pass
 
-    def update_state(self, state, cfg):
-        percent = state.percent
-        if state.ok:
-            color = iconrender.status_color(percent)
-        elif state.error == "asleep" and percent is not None:
-            color = iconrender.GRAY
+    def update_state(self, results, cfg):
+        self.cfg = cfg
+        old = [w["id"] for w in self.rows]
+        self.results = results
+        if old != [d["_id"] for d, _ in results]:
+            self._build()
+            self._place(self.win.winfo_x(), self.win.winfo_y())
         else:
-            percent, color = None, iconrender.GRAY
-        self.pct.config(text="--" if percent is None else str(percent), fg=hexcolor(color))
-        self.name.config(text=("Attack Shark %s" % cfg.get("model_name", "")).strip())
-        self.bar.delete("all")
-        if percent is not None:
-            self.bar.create_rectangle(0, 0, 72 * percent / 100.0, 6, outline="", fill=hexcolor(color))
-        if state.ok:
-            sub = {None: "", True: "⚡ " + t("tip_charging"), False: ""}[state.charging]
-        elif state.error == "asleep":
-            sub = "z z z"
-        else:
-            sub = t("tip_not_found")
-        self.sub.config(text=sub)
+            self._paint()
 
 
 # ═════════════════════════ налаштування ═════════════════════════
@@ -465,9 +706,19 @@ class SettingsWindow:
         pad = dict(padx=8, pady=3)
         outer = ttk.Frame(self.win, padding=12)
         outer.pack(fill="both", expand=True)
+        nb = ttk.Notebook(outer)
+        nb.pack(fill="both", expand=True)
+
+        def tab(key):
+            frame = ttk.Frame(nb, padding=8)
+            nb.add(frame, text=t(key))
+            return frame
+
+        tab_icon, tab_work = tab("tab_icon"), tab("tab_work")
+        tab_widget, tab_mice = tab("tab_widget"), tab("tab_mice")
 
         # --- вигляд ---
-        box = ttk.LabelFrame(outer, text=t("grp_icon"), padding=8)
+        box = ttk.LabelFrame(tab_icon, text=t("grp_icon"), padding=8)
         box.pack(fill="x")
 
         ttk.Label(box, text=t("lbl_style")).grid(row=0, column=0, sticky="w", **pad)
@@ -517,8 +768,8 @@ class SettingsWindow:
             self.prev_labels.append(lbl)
 
         # --- робота ---
-        work = ttk.LabelFrame(outer, text=t("grp_work"), padding=8)
-        work.pack(fill="x", pady=(8, 0))
+        work = ttk.LabelFrame(tab_work, text=t("grp_work"), padding=8)
+        work.pack(fill="x")
         self.poll_var = tk.StringVar(value=str(hr.to_int(cfg["poll_seconds"], 60)))
         self.low_var = tk.StringVar(value=str(hr.to_int(cfg["low_battery_percent"], 15)))
         self.remind_var = tk.StringVar(value=str(hr.to_int(cfg["low_reminder_minutes"], 30)))
@@ -536,7 +787,7 @@ class SettingsWindow:
             row=5, column=0, columnspan=2, sticky="w", **pad)
 
         # --- програма ---
-        app = ttk.LabelFrame(outer, text=t("grp_app"), padding=8)
+        app = ttk.LabelFrame(tab_work, text=t("grp_app"), padding=8)
         app.pack(fill="x", pady=(8, 0))
         ttk.Label(app, text=t("lbl_lang")).grid(row=0, column=0, sticky="w", **pad)
         self.lang_var = tk.StringVar(value=_label_for(LANG_KEYS, cfg.get("language", "auto")))
@@ -549,12 +800,9 @@ class SettingsWindow:
         self.auto_var = tk.BooleanVar(value=winutil.autostart_enabled())
         ttk.Checkbutton(app, text=t("chk_autostart"), variable=self.auto_var).grid(
             row=2, column=0, columnspan=2, sticky="w", **pad)
-        self.widget_var = tk.BooleanVar(value=bool(cfg.get("widget_enabled", False)))
-        ttk.Checkbutton(app, text=t("chk_widget"), variable=self.widget_var).grid(
-            row=3, column=0, columnspan=2, sticky="w", **pad)
 
         # --- оновлення ---
-        upd = ttk.LabelFrame(outer, text=t("grp_update"), padding=8)
+        upd = ttk.LabelFrame(tab_work, text=t("grp_update"), padding=8)
         upd.pack(fill="x", pady=(8, 0))
         self.upd_var = tk.BooleanVar(value=bool(cfg.get("check_updates", True)))
         ttk.Checkbutton(upd, text=t("chk_updates"), variable=self.upd_var).pack(side="left")
@@ -563,18 +811,65 @@ class SettingsWindow:
         ttk.Label(upd, text=t("lbl_version", version.VERSION),
                   foreground=self.pal["muted"]).pack(side="right", padx=10)
 
-        # --- мишка ---
-        mouse = ttk.LabelFrame(outer, text=t("grp_mouse"), padding=8)
-        mouse.pack(fill="x", pady=(8, 0))
-        try:
-            pids = ", ".join("%04X" % p for p in hr.int_list(cfg["pid"]))
-            text = t("mouse_line", cfg.get("model_name", ""), "%04X:%s" % (hr.to_int(cfg["vid"]), pids),
-                     cfg["interface_number"])
-        except hr.ConfigError:
-            text = t("cfg_error")
-        ttk.Label(mouse, text=text).pack(side="left")
-        ttk.Button(mouse, text=t("btn_find"),
-                   command=lambda: open_wizard(self.mgr, self.win)).pack(side="right")
+        # --- віджет ---
+        wbox = ttk.LabelFrame(tab_widget, text=t("grp_widget"), padding=8)
+        wbox.pack(fill="x")
+        self.widget_var = tk.BooleanVar(value=bool(cfg.get("widget_enabled", False)))
+        ttk.Checkbutton(wbox, text=t("chk_widget"), variable=self.widget_var).grid(
+            row=0, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Label(wbox, text=t("lbl_wsize")).grid(row=1, column=0, sticky="w", **pad)
+        self.wsize_var = tk.StringVar(value=_label_for(WIDGET_SIZES, str(cfg.get("widget_size", "bar")).lower(), 1))
+        ttk.Combobox(wbox, textvariable=self.wsize_var, state="readonly", width=34,
+                     values=[t(k) for k, _ in WIDGET_SIZES]).grid(row=1, column=1, sticky="w", **pad)
+        ttk.Label(wbox, text=t("lbl_wscale")).grid(row=2, column=0, sticky="w", **pad)
+        sc = ttk.Frame(wbox)
+        sc.grid(row=2, column=1, sticky="w", **pad)
+        self.wscale_var = tk.DoubleVar(value=_clampf(cfg.get("widget_scale", 1.0), 0.7, 2.5, 1.0))
+        ttk.Scale(sc, from_=0.7, to=2.5, variable=self.wscale_var, length=220,
+                  command=lambda v: self._wlabels()).pack(side="left")
+        self.wscale_lbl = ttk.Label(sc, width=7)
+        self.wscale_lbl.pack(side="left", padx=6)
+        ttk.Label(wbox, text=t("lbl_wopacity")).grid(row=3, column=0, sticky="w", **pad)
+        op = ttk.Frame(wbox)
+        op.grid(row=3, column=1, sticky="w", **pad)
+        self.wopacity_var = tk.DoubleVar(value=_clampf(cfg.get("widget_opacity", 0.93), 0.3, 1.0, 0.93))
+        ttk.Scale(op, from_=0.3, to=1.0, variable=self.wopacity_var, length=220,
+                  command=lambda v: self._wlabels()).pack(side="left")
+        self.wopacity_lbl = ttk.Label(op, width=7)
+        self.wopacity_lbl.pack(side="left", padx=6)
+        self.wsnap_var = tk.BooleanVar(value=bool(cfg.get("widget_snap", True)))
+        self.wclick_var = tk.BooleanVar(value=bool(cfg.get("widget_clickthrough", False)))
+        self.whide_var = tk.BooleanVar(value=bool(cfg.get("widget_hide_fullscreen", True)))
+        self.wred_var = tk.BooleanVar(value=bool(cfg.get("widget_red_low", True)))
+        for row, (key, var) in enumerate((("chk_wsnap", self.wsnap_var), ("chk_wclick", self.wclick_var),
+                                          ("chk_whide", self.whide_var), ("chk_wred", self.wred_var)), 4):
+            ttk.Checkbutton(wbox, text=t(key), variable=var).grid(
+                row=row, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Label(wbox, text=t("widget_hint"), wraplength=520, justify="left",
+                  foreground=self.pal["muted"]).grid(row=8, column=0, columnspan=2, sticky="w", **pad)
+        self._wlabels()
+
+        # --- мишки ---
+        mice = ttk.LabelFrame(tab_mice, text=t("grp_mice"), padding=8)
+        mice.pack(fill="both", expand=True)
+        ttk.Label(mice, text=t("mice_hint"), wraplength=520, justify="left",
+                  foreground=self.pal["muted"]).pack(anchor="w", pady=(0, 6))
+        pal = self.pal
+        self.mice_list = tk.Listbox(mice, height=6, width=74, exportselection=False, bg=pal["field"],
+                                    fg=pal["fg"], selectbackground=pal["accent"], selectforeground="#ffffff",
+                                    highlightthickness=1, highlightbackground=pal["border"], relief="flat")
+        self.mice_list.pack(fill="x")
+        mb = ttk.Frame(mice)
+        mb.pack(fill="x", pady=(8, 0))
+        ttk.Button(mb, text=t("btn_add_known"), command=self.add_known).pack(side="left")
+        ttk.Button(mb, text=t("btn_add_learn"),
+                   command=lambda: open_wizard(self.mgr, self.win, -1)).pack(side="left", padx=6)
+        ttk.Button(mb, text=t("btn_remove"), command=self.remove_mouse).pack(side="right")
+        ttk.Button(mb, text=t("btn_rename"), command=self.rename_mouse).pack(side="right", padx=6)
+        ttk.Button(mice, text=t("btn_find"),
+                   command=lambda: open_wizard(self.mgr, self.win, self._sel_pos())).pack(anchor="w", pady=(8, 0))
+        self.dcfgs = []
+        self._refresh_mice()
 
         self.res = ttk.Label(outer, text="", foreground=self.pal["muted"], font=(FONT, 8))
         self.res.pack(anchor="w", pady=(8, 0))
@@ -589,7 +884,89 @@ class SettingsWindow:
         stats = winutil.process_stats()
         if stats:
             self.res.config(text=t("res_line", "%.0f" % stats[0], "%.2f" % stats[1]))
+        self._refresh_mice()
         self._after = self.win.after(2000, self._tick)
+
+    def _wlabels(self):
+        self.wscale_lbl.config(text="%d%%" % round(float(self.wscale_var.get()) * 100))
+        self.wopacity_lbl.config(text="%d%%" % round(float(self.wopacity_var.get()) * 100))
+
+    # --- список мишок (зміни застосовуються одразу) ---
+    def _sel_pos(self):
+        sel = self.mice_list.curselection()
+        return sel[0] if sel else 0
+
+    def _refresh_mice(self):
+        keep = self.mice_list.curselection()
+        self.dcfgs = hr.device_configs(_cfg())
+        states = {d["_id"]: st for d, st in current_results(self.mgr)}
+        self.mice_list.delete(0, "end")
+        for d in self.dcfgs:
+            try:
+                ids = "%04X:%s" % (hr.to_int(d["vid"]), ",".join("%04X" % p for p in hr.int_list(d["pid"])))
+            except hr.ConfigError:
+                ids = "?"
+            st = states.get(d["_id"])
+            if st is not None and st.ok:
+                stat = "%d%%" % st.percent
+            elif st is not None and st.error == "asleep":
+                stat = t("tip_asleep_nopct")
+            else:
+                stat = t("tip_not_found")
+            self.mice_list.insert("end", t("mice_row", hr.device_name(d), ids, stat))
+        if keep and keep[0] < len(self.dcfgs):
+            self.mice_list.selection_set(keep[0])
+
+    def add_known(self):
+        found = detect.new_known(self.dcfgs)
+        if not found:
+            messagebox.showinfo(t("set_title"), t("mice_none_known"), parent=self.win)
+            return
+        names = []
+        for profile in found:
+            try:
+                hr.save_device(-1, profile["updates"])
+                names.append(profile["updates"].get("model_name") or profile["name"])
+            except (OSError, hr.ConfigError) as e:
+                messagebox.showerror(t("set_title"), t("err_save", e), parent=self.win)
+                return
+        self.app.service.refresh()
+        self._refresh_mice()
+        messagebox.showinfo(t("set_title"), t("mice_added", ", ".join(names)), parent=self.win)
+
+    def rename_mouse(self):
+        pos = self._sel_pos()
+        if pos >= len(self.dcfgs):
+            return
+        name = simpledialog.askstring(t("btn_rename"), t("ask_name"), parent=self.win,
+                                      initialvalue=hr.device_name(self.dcfgs[pos]))
+        if name is None:
+            return
+        try:
+            hr.save_device(pos, {"name": name.strip()})
+        except (OSError, hr.ConfigError) as e:
+            messagebox.showerror(t("set_title"), t("err_save", e), parent=self.win)
+            return
+        self.app.service.refresh()
+        self._refresh_mice()
+
+    def remove_mouse(self):
+        pos = self._sel_pos()
+        if pos >= len(self.dcfgs):
+            return
+        if len(self.dcfgs) < 2:
+            messagebox.showinfo(t("set_title"), t("mice_only_one"), parent=self.win)
+            return
+        if not messagebox.askyesno(t("set_title"), t("mice_confirm_remove", hr.device_name(self.dcfgs[pos])),
+                                   parent=self.win):
+            return
+        try:
+            hr.remove_device(pos)
+        except (OSError, hr.ConfigError) as e:
+            messagebox.showerror(t("set_title"), t("err_save", e), parent=self.win)
+            return
+        self.app.service.refresh()
+        self._refresh_mice()
 
     def _on_style(self, _evt=None):
         key = _value_for(STYLE_KEYS, self.style_var.get())
@@ -651,6 +1028,13 @@ class SettingsWindow:
             "language": _value_for(LANG_KEYS, self.lang_var.get()),
             "window_theme": _value_for(THEME_KEYS, self.theme_var.get()),
             "widget_enabled": bool(self.widget_var.get()),
+            "widget_size": _value_for(WIDGET_SIZES, self.wsize_var.get()),
+            "widget_scale": round(float(self.wscale_var.get()), 2),
+            "widget_opacity": round(float(self.wopacity_var.get()), 2),
+            "widget_snap": bool(self.wsnap_var.get()),
+            "widget_clickthrough": bool(self.wclick_var.get()),
+            "widget_hide_fullscreen": bool(self.whide_var.get()),
+            "widget_red_low": bool(self.wred_var.get()),
             "check_updates": bool(self.upd_var.get()),
         })
         try:
@@ -676,7 +1060,8 @@ class SettingsWindow:
 # ═════════════════════════ майстер пошуку мишки ═════════════════════════
 
 class WizardWindow:
-    def __init__(self, mgr, parent):
+    def __init__(self, mgr, parent, target=0):
+        self.target = target
         self.mgr = mgr
         self.app = mgr.app
         self.pal = mgr.pal
@@ -704,6 +1089,18 @@ class WizardWindow:
         pad = dict(padx=6, pady=3)
         outer = ttk.Frame(self.top, padding=12)
         outer.pack(fill="both", expand=True)
+
+        tgt = ttk.Frame(outer)
+        tgt.pack(fill="x", pady=(0, 8))
+        ttk.Label(tgt, text=t("lbl_target")).pack(side="left")
+        self.mice_names = [hr.device_name(d) for d in hr.device_configs(_cfg())]
+        choices = self.mice_names + [t("target_new")]
+        self.target_var = tk.StringVar()
+        self.target_combo = ttk.Combobox(tgt, textvariable=self.target_var, state="readonly", width=40,
+                                         values=choices)
+        self.target_combo.pack(side="left", padx=8)
+        self.target_combo.current(len(self.mice_names) if self.target == -1
+                                  else max(0, min(self.target, len(self.mice_names) - 1)))
 
         a = ttk.LabelFrame(outer, text=t("wiz_known"), padding=8)
         a.pack(fill="x")
@@ -756,6 +1153,11 @@ class WizardWindow:
 
         ttk.Button(outer, text=t("btn_close"), command=self.close).pack(anchor="e", pady=(10, 0))
 
+    def _target_pos(self):
+        """Позиція мишки для збереження: 0 — основна, k — додаткова, -1 — нова."""
+        idx = self.target_combo.current()
+        return -1 if idx < 0 or idx >= len(self.mice_names) else idx
+
     def _post(self, fn, *args):
         """Виклик у потоці UI з робочого потоку (через чергу менеджера)."""
         self.mgr.q.put(("_wizard_call", (fn, args)))
@@ -766,7 +1168,7 @@ class WizardWindow:
         if not sel or not self.matches:
             return
         profile = self.matches[sel[0]]
-        hr.save_config(profile["updates"])
+        hr.save_device(self._target_pos(), profile["updates"])
         self.app.service.refresh()
         messagebox.showinfo(t("wiz_title"), t("wiz_saved", profile["name"]), parent=self.top)
 
@@ -832,15 +1234,17 @@ class WizardWindow:
         sel = self.results.curselection()
         if not sel:
             return
-        hr.save_config(detect.updates_from_candidate(self.cands[sel[0]], self.vid, self.pid))
+        hr.save_device(self._target_pos(), detect.updates_from_candidate(self.cands[sel[0]], self.vid, self.pid))
         self.app.service.refresh()
         messagebox.showinfo(t("wiz_title"), t("wiz_applied"), parent=self.top)
 
     # --- навчання статусу зарядки ---
     def capture(self, phase):
         try:
-            cfg = hr.load_config()
-        except hr.ConfigError as e:
+            dcfgs = hr.device_configs(hr.load_config())
+            pos = self._target_pos()
+            cfg = dcfgs[len(dcfgs) - 1 if pos < 0 else pos]
+        except (hr.ConfigError, IndexError) as e:
             self.charge_msg.config(text=t("wiz_error", e))
             return
         self.off_btn.config(state="disabled")
@@ -881,8 +1285,9 @@ class WizardWindow:
         if not self.charge_result:
             return
         r = self.charge_result
-        hr.save_config({"charging_byte_index": r["index"], "charging_mask": "0xFF",
-                        "charging_value": "0x%02X" % r["on_value"]})
+        pos = self._target_pos()
+        hr.save_device(0 if pos < 0 else pos, {"charging_byte_index": r["index"], "charging_mask": "0xFF",
+                                               "charging_value": "0x%02X" % r["on_value"]})
         self.app.service.refresh()
         messagebox.showinfo(t("wiz_title"), t("wiz_charge_saved"), parent=self.top)
 

@@ -77,8 +77,26 @@ DEFAULT_CONFIG = {
     "update_check_hours": 24,
     "update_repo": "Krebeke/attack-shark-battery",
     "icon_style": "windows",    # windows | colored (решта icon_* — перевизначення пресета)
+    "widget_size": "bar",       # compact | bar | graph
+    "widget_scale": 1.0,        # 0.7 … 2.5 (колесо миші над віджетом)
+    "widget_opacity": 0.93,     # 0.3 … 1.0
+    "widget_snap": True,        # прилипати до країв екрана
+    "widget_clickthrough": False,       # клікати «крізь» віджет (вимкнути можна в меню значка)
+    "widget_hide_fullscreen": True,     # ховати віджет у повноекранних іграх/відео
+    "widget_red_low": True,     # червона рамка, коли заряд нижче порогу
+    "serial": "",               # серійний номер ресивера (для двох однакових мишок)
+    "name": "",                 # власна назва мишки (порожньо = "Attack Shark <model_name>")
+    "extra_mice": [],           # додаткові мишки: список словників із ключами DEVICE_KEYS (+ "id")
     "debug": False,
 }
+
+# Ключі, що описують саме пристрій (решта — загальні налаштування програми).
+DEVICE_KEYS = (
+    "model_name", "name", "serial", "vid", "pid", "usage_page", "usage", "interface_number", "method",
+    "request_hex", "request_length", "response_report_id", "response_length", "response_prefix_hex",
+    "response_delay_ms", "response_timeout_ms", "battery_byte_index", "battery_mask", "battery_raw_max",
+    "charging_byte_index", "charging_mask", "charging_value", "sleep_prefix_hex",
+)
 
 
 def app_dir():
@@ -190,6 +208,87 @@ def load_config(path=None):
     return dict(cfg)
 
 
+def device_configs(cfg):
+    """Список конфігів усіх мишок: [основна, додаткові…]. Кожен — повний конфіг із ключем "_id"
+    (стабільний номер для історії: 0 — основна)."""
+    base = {k: v for k, v in cfg.items() if k != "extra_mice"}
+    out = [dict(base, _id=0)]
+    used = {0}
+    for pos, extra in enumerate(cfg.get("extra_mice") or [], 1):
+        if not isinstance(extra, dict):
+            continue
+        d = dict(base)
+        d.update({k: DEFAULT_CONFIG[k] for k in DEVICE_KEYS})
+        d.update({k: v for k, v in extra.items() if k != "id"})
+        try:
+            ident = int(extra.get("id", pos))
+        except (TypeError, ValueError):
+            ident = pos
+        while ident in used:
+            ident += 1
+        used.add(ident)
+        d["_id"] = ident
+        out.append(d)
+    return out
+
+
+def device_name(dcfg):
+    name = str(dcfg.get("name") or "").strip()
+    return name or ("Attack Shark %s" % (dcfg.get("model_name") or "")).strip()
+
+
+def _raw_config(path=None):
+    try:
+        with open(path or config_path(), encoding="utf-8-sig") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_device(position, updates):
+    """Записує ключі пристрою. position: 0 — основна мишка, k≥1 — k-та додаткова (за порядком у списку),
+    -1 — додати нову додаткову. Повертає позицію збереженої мишки."""
+    raw = _raw_config()
+    extras = [dict(e) for e in (raw.get("extra_mice") or []) if isinstance(e, dict)]
+    if position == 0:
+        save_config(dict(updates))
+        return 0
+    if position == -1:
+        new = {k: v for k, v in updates.items() if k in DEVICE_KEYS}
+        new["id"] = max([0] + [to_int(e.get("id"), i) for i, e in enumerate(extras, 1)]) + 1
+        new.setdefault("model_name", "")
+        if not new["model_name"] and not new.get("name"):
+            new["name"] = "Attack Shark #%d" % (len(extras) + 2)
+        extras.append(new)
+        save_config({"extra_mice": extras})
+        return len(extras)
+    if 1 <= position <= len(extras):
+        extras[position - 1].update({k: v for k, v in updates.items() if k in DEVICE_KEYS})
+        save_config({"extra_mice": extras})
+        return position
+    raise ConfigError("Немає мишки з номером %d" % position)
+
+
+def remove_device(position):
+    """Видаляє мишку. Основну можна видалити, лише якщо є додаткові (перша додаткова стає основною)."""
+    raw = _raw_config()
+    extras = [dict(e) for e in (raw.get("extra_mice") or []) if isinstance(e, dict)]
+    if position == 0:
+        if not extras:
+            return False
+        first = extras.pop(0)
+        updates = {k: DEFAULT_CONFIG[k] for k in DEVICE_KEYS}
+        updates.update({k: v for k, v in first.items() if k in DEVICE_KEYS})
+        updates["extra_mice"] = extras
+        save_config(updates)
+        return True
+    if 1 <= position <= len(extras):
+        del extras[position - 1]
+        save_config({"extra_mice": extras})
+        return True
+    return False
+
+
 def find_candidates(cfg):
     """Повертає список HID-інтерфейсів, що підходять під фільтр із конфігу."""
     if hid is None:
@@ -199,10 +298,13 @@ def find_candidates(cfg):
     usage_page = to_int(cfg["usage_page"])
     usage = to_int(cfg["usage"])
     iface = to_int(cfg["interface_number"], -1)
+    serial = str(cfg.get("serial") or "").strip()
 
     result = []
     for info in hid.enumerate(vid, 0):
         if info["product_id"] not in pids:
+            continue
+        if serial and (info.get("serial_number") or "") != serial:
             continue
         if usage_page and info["usage_page"] != usage_page:
             continue

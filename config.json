@@ -45,5 +45,13 @@
   "idle_poll_seconds": 600,
   "check_updates": true,
   "update_check_hours": 24,
-  "update_repo": "Krebeke/attack-shark-battery"
+  "update_repo": "Krebeke/attack-shark-battery",
+  "widget_size": "bar",
+  "widget_scale": 1.0,
+  "widget_opacity": 0.93,
+  "widget_snap": true,
+  "widget_clickthrough": false,
+  "widget_hide_fullscreen": true,
+  "widget_red_low": true,
+  "extra_mice": []
 }
